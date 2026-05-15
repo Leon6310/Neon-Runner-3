@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>Sci-Fi Tower Defense Elite</title>
+</head>
+<body>
+
+  <div id="game-container">
+    
+    <!-- HAUPTMENÜ -->
+    <div id="main-menu" class="panel">
+      <h1>🤖 MECH COMMANDER</h1>
+      <p class="subtitle">Steuere deinen Helden mit WASD & Errichte die ultimative Verteidigung</p>
+      
+      <div class="menu-stats">
+        <div class="stat-row">
+          <span>Commander-Stufe:</span>
+          <span id="menu-level" class="highlight-blue">1</span>
+        </div>
+      </div>
+
+      <h3>WÄHLE DEINEN SEKTOR:</h3>
+      <div class="map-grid">
+        <div id="map-card-0" class="map-card active-map" onclick="selectMap(0)">Sektor Alpha (Klassisch)</div>
+        <div id="map-card-1" class="map-card" onclick="selectMap(1)">Bio-Labor Sektor B</div>
+      </div>
+
+      <button id="start-btn" class="primary-btn" onclick="startGame()">MISSION STARTEN 🎮</button>
+    </div>
+
+    <!-- GAME HUD -->
+    <div id="game-hud" class="game-ui hidden">
+      <div class="hud-box">💰 Gold: <span id="gold-display" class="highlight-gold">600</span>$</div>
+      <div class="hud-box">❤️ Kern-Schild: <span id="lives-display" class="highlight-red">15</span></div>
+      <div class="hud-box">👾 Welle: <span id="wave-display" class="highlight-blue">1</span></div>
+      <button id="pause-trigger-btn" class="hud-btn" onclick="togglePause()">⏸️ Pause</button>
+    </div>
+
+    <!-- SPIELFELD -->
+    <div id="canvas-wrapper">
+      <canvas id="gameCanvas" width="650" height="450" class="game-ui hidden"></canvas>
+    </div>
+
+    <!-- SYSTEM LOG -->
+    <div id="log-panel" class="game-ui hidden">
+      <div id="log-messages">📡 System initialisiert. Mech einsatzbereit. Bewegung mit W, A, S, D!</div>
+    </div>
+
+    <!-- SHOP & STRATEGIE-PANEL -->
+    <div id="shop-panel" class="game-ui hidden">
+      <h3>VERTEIDIGUNGS-STRUKTUREN</h3>
+      <div class="shop-grid">
+        <div id="shop-gatling" class="shop-item active-shop" onclick="selectTower('gatling', 70)">
+          <span class="icon">🔴</span> <div><strong>Gatling</strong><br><small>Schnellfeuer</small></div> <span class="cost">70$</span>
+        </div>
+        <div id="shop-plasma" class="shop-item" onclick="selectTower('plasma', 120)">
+          <span class="icon">🟣</span> <div><strong>Plasma-Werfer</strong><br><small>Flächenschaden</small></div> <span class="cost">120$</span>
+                </div>
+        <div id="shop-frost" class="shop-item" onclick="selectTower('frost', 90)">
+          <span class="icon">🔵</span> <div><strong>Chrono-Stasis</strong><br><small>Verlangsamt</small></div> <span class="cost">90$</span>
+        </div>
+        <div id="shop-tesla" class="shop-item" onclick="selectTower('tesla', 150)">
+          <span class="icon">⚡</span> <div><strong>Tesla-Spule</strong><br><small>Kettenblitz</small></div> <span class="cost">150$</span>
+        </div>
+        <div id="shop-laser" class="shop-item" onclick="selectTower('laser', 180)">
+          <span class="icon">🔥</span> <div><strong>Railgun Sniper</strong><br><small>Rüstungsbrecher</small></div> <span class="cost">180$</span>
+        </div>
+        <div id="shop-mine" class="shop-item" onclick="selectTower('mine', 60)">
+          <span class="icon">🟢</span> <div><strong>Schild-Station</strong><br><small>Support-Energie</small></div> <span class="cost">60$</span>
+        </div>
+      </div>
+
+      <!-- SOUND-OPTIONEN -->
+      <div class="audio-controls">
+        <label><input type="checkbox" id="sfx-toggle" checked> 🔊 Sound-Effekte</label>
+      </div>
+    </div>
+
+  </div>
+
+</body>
+</html>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// Game State
+let playerGold = 600; 
+let playerLives = 15; 
+let currentWave = 1;
+let selectedTowerType = 'gatling'; 
+let selectedTowerCost = 70;
+let activeMapIndex = 0;
+let isPaused = false;
+let gameStarted = false;
+let animationFrameId = null;
+
+// Progress
+let playerLevel = 1;
+let playerXP = 0;
+let xpNeeded = 100;
+let adminActive = false;
+
+// Entities
+let enemies = [];
+let towers = [];
+let projectiles = [];
+let particles = [];
+let damageTexts = [];
+let spawnTimer = 0;
+let enemiesSpawnedInWave = 0;
+let inventory = { dynamite: 0, potion: 0 };
+
+// --- HELDEN SYSTEM (MECH) ---
+let hero = null;
+let keys = {};
+
+// Keyboard Listeners für die Helden-Steuerung
+window.addEventListener('keydown', (e) => { keys[e.key.toLowerCase()] = true; });
+window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+function spawnHero() {
+  if (hero) return; // Maximal ein Held
+  hero = {
+    x: 325, y: 225,
+    speed: 3.5,
+    radius: 18,
+    range: 150,
+    damage: 35,
+    cooldown: 0,
+    fireRate: 20,
+    angle: 0
+  };
+  logMessage("🤖 MECH AKTIVIERT: Steuerung mit W, A, S, D!");
+  playSound('levelup');
+}
+
+function updateHero() {
+  if (!hero) return;
+
+  // Bewegung (W, A, S, D)
+  if (keys['w'] || keys['arrowup']) hero.y -= hero.speed;
+  if (keys['s'] || keys['arrowdown']) hero.y += hero.speed;
+  if (keys['a'] || keys['arrowleft']) hero.x -= hero.speed;
+  if (keys['d'] || keys['arrowright']) hero.x += hero.speed;
+
+  // Grenzen einhalten
+  hero.x = Math.max(hero.radius, Math.min(canvas.width - hero.radius, hero.x));
+  hero.y = Math.max(hero.radius, Math.min(canvas.height - hero.radius, hero.y));
+
+  // Kampf-Logik des Helden
+  let target = null;
+  for (let e of enemies) {
+    if (Math.sqrt((e.x - hero.x)**2 + (e.y - hero.y)**2) <= hero.range) {
+      target = e; break;
+    }
+  }
+
+  if (target) {
+    hero.angle = Math.atan2(target.y - hero.y, target.x - hero.x);
+    if (hero.cooldown === 0) {
+      projectiles.push({
+        x: hero.x, y: hero.y, target: target, speed: 9,
+        damage: hero.damage, type: 'hero-laser', colorOverride: '#f59e0b'
+      });
+      hero.cooldown = hero.fireRate;
+      playSound('shoot');
+    }
+  }
+  if (hero.cooldown > 0) hero.cooldown--;
+}
+
+function drawHero() {
+  if (!hero) return;
+  ctx.save();
+  ctx.translate(hero.x, hero.y);
+  
+  // Aura / Reichweite leicht andeuten
+  ctx.strokeStyle = 'rgba(245, 158, 11, 0.15)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(0, 0, hero.range, 0, Math.PI*2); ctx.stroke();
+
+  // Mech-Füße / Ketten
+  ctx.fillStyle = '#334155';
+  ctx.fillRect(-14, -12, 6, 24);
+  ctx.fillRect(8, -12, 6, 24);
+
+  // Haupt-Chassis
+  ctx.rotate(hero.angle);
+  ctx.fillStyle = '#d97706'; // Gold/Orangefarbener Elite-Body
+  ctx.beginPath(); ctx.arc(0, 0, 14, 0, Math.PI*2); ctx.fill();
+  
+  // Schulterpanzer
+  ctx.fillStyle = '#b45309';
+  ctx.fillRect(-12, -14, 6, 6);
+  ctx.fillRect(-12, 8, 6, 6);
+
+  // Zwillings-Kanone des Mechs
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(4, -5, 16, 3);
+  ctx.fillRect(4, 2, 16, 3);
+
+  // Glühender Cockpit-Kern
+  ctx.fillStyle = '#38bdf8';
+  ctx.beginPath(); ctx.arc(-2, 0, 4, 0, Math.PI*2); ctx.fill();
+
+  ctx.restore();
+}
+
+// --- VISUELLE EFFEKTE (JUICE) ---
+let screenShakeTimer = 0;
+let screenShakeIntensity = 0;
+let rotationEffectTimer = 0; // Für rotierende Turm-Animationen
+
+function triggerScreenShake(duration, intensity) {
+  screenShakeTimer = duration; screenShakeIntensity = intensity;
+}
+
+function addDamageText(x, y, text, color = '#ef4444') {
+  damageTexts.push({ x: x, y: y, text: text, color: color, life: 30, alpha: 1 });
+}
+
+// --- AUDIO ENGINE ---
+let audioCtx = null;
+function initAudio() { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+
+function playSound(type) {
+  if (!document.getElementById('sfx-toggle').checked || !audioCtx) return;
+  let osc = audioCtx.createOscillator();
+  let gain = audioCtx.createGain();
+  osc.connect(gain); gain.connect(audioCtx.destination);
+  let now = audioCtx.currentTime;
+  
+  if (type === 'shoot') {
+    osc.type = 'sawtooth'; osc.frequency.setValueAtTime(350, now);
+    osc.frequency.exponentialRampToValueAtTime(60, now + 0.1);
+    gain.gain.setValueAtTime(0.06, now); gain.gain.linearRampToValueAtTime(0.01, now + 0.1);
+    osc.start(now); osc.stop(now + 0.1);
+  } else if (type === 'explosion') {
+    osc.type = 'triangle'; osc.frequency.setValueAtTime(120, now);
+    osc.frequency.linearRampToValueAtTime(10, now + 0.3);
+    gain.gain.setValueAtTime(0.2, now); gain.gain.linearRampToValueAtTime(0.01, now + 0.3);
+    osc.start(now); osc.stop(now + 0.3);
+  } else if (type === 'levelup') {
+    osc.type = 'sine'; osc.frequency.setValueAtTime(300, now);
+    osc.frequency.setValueAtTime(500, now + 0.1);
+    gain.gain.setValueAtTime(0.1, now); gain.gain.linearRampToValueAtTime(0.01, now + 0.3);
+    osc.start(now); osc.stop(now + 0.3);
+  } else if (type === 'click') {
+    osc.type = 'sine'; osc.frequency.setValueAtTime(600, now);
+    gain.gain.setValueAtTime(0.05, now); gain.gain.linearRampToValueAtTime(0.01, now + 0.05);
+    osc.start(now); osc.stop(now + 0.05);
+  }
+}
+
+// MAPS CONFIG
+const maps = [
+  [ {x: -30, y: 100}, {x: 480, y: 100}, {x: 480, y: 260}, {x: 140, y: 260}, {x: 140, y: 400}, {x: 680, y: 400} ],
+  [ {x: 325, y: -30}, {x: 325, y: 180}, {x: 80, y: 180}, {x: 80, y: 350}, {x: 570, y: 350}, {x: 570, y: 480} ]
+];
+
+window.selectMap = function(idx) {
+  if (gameStarted) return; playSound('click'); activeMapIndex = idx % maps.length;
+}
+
+window.startGame = function() {
+  initAudio(); playSound('levelup');
+  document.getElementById('main-menu').classList.add('hidden');
+  document.querySelectorAll('.game-ui').forEach(el => el.classList.remove('hidden'));
+  gameStarted = true; isPaused = false;
+  spawnHero(); // Mech spawnen bei Start
+  updateUI(); gameLoop();
+}
+
+window.togglePause = function() {
+  if (!gameStarted) return; playSound('click'); isPaused = !isPaused;
+  if (!isPaused) gameLoop();
+}
+
+window.quitToMainMenu = function() {
+  playSound('click'); gameStarted = false;
+  cancelAnimationFrame(animationFrameId);
+  playerGold = 600; playerLives = 15; currentWave = 1; hero = null;
+  enemies = []; towers = []; projectiles = []; particles = []; damageTexts = [];
+  document.querySelectorAll('.game-ui').forEach(el => el.add('hidden'));
+  document.getElementById('main-menu').classList.remove('hidden');
+}
+
+function updateUI() {
+  if (!gameStarted) return;
+  document.getElementById('gold-display').innerText = playerGold;
+  document.getElementById('lives-display').innerText = playerLives;
+  document.getElementById('wave-display').innerText = currentWave;
+}
+
+function logMessage(text) { document.getElementById('log-messages').innerText = text; }
+
+window.selectTower = function(type, cost) {
+  playSound('click'); selectedTowerType = type; selectedTowerCost = cost;
+}
+
+// --- TOWER CONFIG & HOCHDETAILLIERTES ZEICHNEN ---
+function drawAdvancedTower(t) {
+  ctx.save();
+  ctx.translate(t.x, t.y);
+
+  // 1. Gemeinsame mechanische Basis-Plattform (Hi-Tech Look)
+  ctx.fillStyle = '#334155';
+  ctx.beginPath(); ctx.arc(0, 0, 18, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = '#64748b'; ctx.lineWidth = 2; ctx.stroke();
+  
+  // Lüftungsschlitze auf der Plattform
+  ctx.fillStyle = '#1e293b';
+  for(let i=0; i<4; i++) {
+    ctx.rotate(Math.PI / 2);
+    ctx.fillRect(-2, -16, 4, 4);
+  }
+
+  // 2. Turm-Spezifische Designs
+  if (t.type === 'gatling') {
+    // Rotierender Aufbau
+    ctx.rotate(t.angle);
+    ctx.fillStyle = '#475569';
+    ctx.fillRect(-10, -10, 20, 20);
+    // Doppel-Lauf mit Mündungsbremse
+    ctx.fillStyle = '#94a3b8';
+    ctx.fillRect(6, -6, 16, 4);
+    ctx.fillRect(6, 2, 16, 4);
+    ctx.fillStyle = '#ef4444'; // Rote Laser-Zieloptik
+    ctx.fillRect(18, -4, 2, 2);
+
+  } else if (t.type === 'plasma') {
+    // Pulsierender Energiekern im Zentrum
+    let pulse = Math.sin(rotationEffectTimer * 0.1) * 3;
+    ctx.fillStyle = '#1e1b4b';
+    ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI*2); ctx.fill();
+    
+    // Plasma-Spulen außen
+    ctx.strokeStyle = '#a855f7'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(0, 0, 11 + pulse, 0, Math.PI*2); ctx.stroke();
+
+    // Lauf schaut Richtung Gegner
+    ctx.rotate(t.angle);
+    ctx.fillStyle = '#6b21a8';
+    ctx.fillRect(0, -5, 18, 10);
+    ctx.fillStyle = '#c084fc';
+    ctx.fillRect(14, -3, 6, 6);
+
+  } else if (t.type === 'frost') {
+    // Rotierende Dreiecks-Matrix (Kältefeld)
+    ctx.rotate(rotationEffectTimer * 0.02);
+    ctx.strokeStyle = '#06b6d4'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < 3; i++) {
+      let angle = (i * 2 * Math.PI) / 3;
+      let x = Math.cos(angle) * 14;
+      let y = Math.sin(angle) * 14;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath(); ctx.stroke();
+    // Kristall-Zentrum
+    ctx.fillStyle = '#22d3ee';
+    ctx.fillRect(-4, -4, 8, 8);
+
+  } else if (t.type === 'tesla') {
+    // Tesla-Generator mit sichtbaren Blitz-Isolatoren
+    ctx.fillStyle = '#475569';
+    ctx.fillRect(-6, -6, 12, 12);
+    // Kupfer-Spulenringe
+    ctx.fillStyle = '#b45309';
+    ctx.fillRect(-8, -4, 2, 8);
+    ctx.fillRect(6, -4, 2, 8);
+    // Blitz-Kugel oben drauf
+    let charge = Math.random() > 0.7 ? '#f59e0b' : '#3b82f6';
+    ctx.fillStyle = charge;
+    ctx.beginPath(); ctx.arc(0, 0, 6, 0, Math.PI*2); ctx.fill();
+
+  } else if (t.type === 'laser') {
+    // Railgun Sniper-Aufbau
+    ctx.rotate(t.angle);
+    ctx.fillStyle = '#1e293b';
+    ctx.fillRect(-12, -7, 24, 14);
+    // Extrem langer Magnetschienen-Lauf
+    ctx.fillStyle = '#64748b';
+    ctx.fillRect(0, -3, 26, 6);
+    ctx.fillStyle = '#f43f5e'; // Geladene Schiene
+    ctx.fillRect(8, -1, 14, 2);
+
+  } else if (t.type === 'mine') {
+    // Support- / Schildstation
+    ctx.rotate(rotationEffectTimer * -0.01);
+    ctx.fillStyle = '#065f46';
+    ctx.fillRect(-10, -10, 20, 20);
+    // Hexagonal-Muster-Schild
+    ctx.strokeStyle = '#34d399'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(0, 0, 13, 0, Math.PI*2); ctx.stroke();
+    ctx.fillStyle = '#10b981';
+    ctx.beginPath(); ctx.arc(0, 0, 4, 0, Math.PI*2); ctx.fill();
+  }
+
+  // Level-Anzeige (Sterne am Fuß des Turms)
+  ctx.restore();
+  ctx.fillStyle = '#f59e0b';
+  ctx.font = '9px sans-serif';
+  ctx.fillText('★'.repeat(t.level), t.x - 10, t.y + 26);
+}
+
+// CANVAS CLICK (TURM BAUEN)
+canvas.addEventListener('click', (event) => {
+  if (isPaused || !gameStarted) return;
+  const rect = canvas.getBoundingClientRect();
+  const mouseX = event.clientX - rect.left;
+  const mouseY = event.clientY - rect.top;
+  
+  if (playerGold >= selectedTowerCost) {
+    let newTower = {
+      x: mouseX, y: mouseY, type: selectedTowerType, cooldown: 0,
+      angle: 0, level: 1, baseDamage: 0, range: 0, fireRate: 0
+    };
+    if (selectedTowerType === 'gatling') { newTower.range = 130; newTower.fireRate = 12; newTower.baseDamage = 6; }
+    else if (selectedTowerType === 'plasma') { newTower.range = 110; newTower.fireRate = 60; newTower.baseDamage = 45; }
+    else if (selectedTowerType === 'frost') { newTower.range = 100; newTower.fireRate = 40; newTower.baseDamage = 4; }
+    else if (selectedTowerType === 'tesla') { newTower.range = 150; newTower.fireRate = 50; newTower.baseDamage = 25; }
+    else if (selectedTowerType === 'laser') { newTower.range = 220; newTower.fireRate = 90;  newTower.baseDamage = 90; } // Railgun
+    else if (selectedTowerType === 'mine') { newTower.range = 120; newTower.fireRate = 200; newTower.baseDamage = 10; } // Supporter
+    
+    towers.push(newTower); 
+    playerGold -= selectedTowerCost;
+    playSound('click'); updateUI();
+  }
+});
+
+// --- GAME LOOP ---
+function gameLoop() {
+  if (!gameStarted || isPaused) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
+  rotationEffectTimer++;
+
+  // Screen Shake translation
+  ctx.save();
+  if (screenShakeTimer > 0) {
+    ctx.translate((Math.random()-0.5)*screenShakeIntensity, (Math.random()-0.5)*screenShakeIntensity);
+    screenShakeTimer--;
+  }
+
+  // Map & Wege zeichnen
+  let pts = maps[activeMapIndex];
+  ctx.strokeStyle = '#1e1b4b'; ctx.lineWidth = 34; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+  for(let i=1; i<pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.stroke();
+
+  // Spawnen von Gegnern
+  let maxEnemies = 10 + currentWave * 3;
+  if (enemiesSpawnedInWave < maxEnemies) {
+    spawnTimer++;
+    if (spawnTimer >= 35) {
+      enemies.push({
+        x: pts[0].x, y: pts[0].y, checkpointIndex: 1,
+        speed: 1.2 + (Math.random()*0.5), hp: 30 + (currentWave * 25), maxHp: 30 + (currentWave * 25),
+        radius: 12, slowTimer: 0
+      });
+      enemiesSpawnedInWave++; spawnTimer = 0;
+    }
+  } else if (enemies.length === 0) {
+    playerGold += 150 + currentWave * 15; currentWave++; enemiesSpawnedInWave = 0; updateUI();
+  }
+
+  // Helden updaten & zeichnen
+  updateHero();
+  drawHero();
+
+  // Gegner verarbeiten
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    let e = enemies[i]; let target = pts[e.checkpointIndex];
+    let dx = target.x - e.x; let dy = target.y - e.y; let dist = Math.sqrt(dx*dx + dy*dy);
+    
+    if (dist < 5) {
+      e.checkpointIndex++;
+      if (e.checkpointIndex >= pts.length) {
+        playerLives--; enemies.splice(i, 1); updateUI();
+        if (playerLives <= 0) { alert("Game Over!"); quitToMainMenu(); return; }
+        continue;
+      }
+    }
+    
+    let speed = e.speed;
+    if (e.slowTimer > 0) { speed *= 0.5; e.slowTimer--; }
+    e.x += (dx / dist) * speed; e.y += (dy / dist) * speed;
+
+    // Alien zeichnen
+    ctx.fillStyle = '#a855f7';
+    ctx.beginPath(); ctx.arc(e.x, e.y, e.radius, 0, Math.PI*2); ctx.fill();
+    // Lebenbalken
+    ctx.fillStyle = '#ef4444'; ctx.fillRect(e.x - 12, e.y - 16, 24, 3);
+    ctx.fillStyle = '#22c55e'; ctx.fillRect(e.x - 12, e.y - 16, (e.hp / e.maxHp) * 24, 3);
+  }
+
+  // Türme verarbeiten
+  towers.forEach(t => {
+    let targetEnemy = null;
+    for (let e of enemies) {
+      if (Math.sqrt((e.x - t.x)**2 + (e.y - t.y)**2) <= t.range) { targetEnemy = e; break; }
+    }
+    
+    if (targetEnemy) t.angle = Math.atan2(targetEnemy.y - t.y, targetEnemy.x - t.x);
+    drawAdvancedTower(t);
+
+    if (t.cooldown > 0) t.cooldown--;
+    if (targetEnemy && t.cooldown === 0) {
+      projectiles.push({ x: t.x, y: t.y, target: targetEnemy, speed: 8, damage: t.baseDamage, type: t.type });
+      t.cooldown = t.fireRate; playSound('shoot');
+    }
+  });
+
+  // Projektile verarbeiten
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    let p = projectiles[i];
+    let dx = p.target.x - p.x; let dy = p.target.y - p.y; let dist = Math.sqrt(dx*dx + dy*dy);
+
+    if (dist < 8) {
+      if (p.type === 'frost') p.target.slowTimer = 90;
+      p.target.hp -= p.damage;
+      addDamageText(p.target.x, p.target.y, `-${p.damage}`, p.type==='frost'?'#06b6d4':'#ef4444');
+      
+      if (p.type === 'plasma') {
+        triggerScreenShake(8, 3);
+        enemies.forEach(e => {
+          if (Math.sqrt((e.x - p.x)**2 + (e.y - p.y)**2) < 50) e.hp -= 15;
+        });
+      }
+
+      if (p.target.hp <= 0) {
+        let idx = enemies.indexOf(p.target);
+        if (idx > -1) { enemies.splice(idx, 1); playerGold += 15; updateUI(); }
+      }
+      projectiles.splice(i, 1);
+    } else {
+      p.x += (dx / dist) * p.speed; p.y += (dy / dist) * p.speed;
+      ctx.fillStyle = p.colorOverride || '#f59e0b';
+      ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI*2); ctx.fill();
+    }
+  }
+
+  // Floating Texts
+  for (let i = damageTexts.length - 1; i >= 0; i--) {
+    let dt = damageTexts[i]; dt.y -= 0.5; dt.life--;
+    ctx.fillStyle = dt.color; ctx.font = 'bold 10px sans-serif';
+    ctx.fillText(dt.text, dt.x, dt.y);
+    if (dt.life <= 0) damageTexts.splice(i, 1);
+  }
+
+  ctx.restore();
+  animationFrameId = requestAnimationFrame(gameLoop);
+}
+body {
+  background-color: #020617;
+  color: #f8fafc;
+  font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  margin: 0;
+  padding: 10px;
+  user-select: none;
+}
+
+#game-container {
+  width: 670px;
+  background-color: #0f172a;
+  padding: 20px;
+  border-radius: 16px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.8);
+  border: 1px solid #1e293b;
+}
+
+h1 {
+  text-align: center;
+  font-size: 32px;
+  letter-spacing: 3px;
+  margin-top: 10px;
+  color: #38bdf8;
+  text-shadow: 0 0 15px rgba(56, 189, 248, 0.5);
+}
+
+.subtitle {
+  text-align: center;
+  color: #94a3b8;
+  font-size: 13px;
+  margin-top: -10px;
+  margin-bottom: 25px;
+  line-height: 1.4;
+}
+
+.panel {
+  padding: 10px;
+}
+
+.menu-stats {
+  background-color: #1e293b;
+  padding: 15px;
+  border-radius: 10px;
+  margin-bottom: 20px;
+  border-left: 4px solid #38bdf8;
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  font-weight: bold;
+  font-size: 16px;
+}
+
+/* SEKTOR AUSWAHL GRID */
+.map-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin-bottom: 25px;
+}
+
+.map-card {
+  background-color: #1e293b;
+  padding: 15px;
+  text-align: center;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: bold;
+  border: 2px solid transparent;
+  transition: all 0.2s ease-in-out;
+}
+
+.map-card:hover {
+  background-color: #334155;
+  color: #38bdf8;
+}
+
+.active-map {
+  border-color: #38bdf8;
+  background-color: #0369a1;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.3);
+}
+
+/* BUTTONS */
+.primary-btn {
+  width: 100%;
+  background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+  color: white;
+  padding: 16px;
+  font-size: 18px;
+  font-weight: bold;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.4);
+  transition: transform 0.1s;
+}
+
+.primary-btn:hover {
+  background: linear-gradient(135deg, #60a5fa, #2563eb);
+}
+
+.primary-btn:active {
+  transform: scale(0.99);
+}
+
+/* GAME HUD */
+#game-hud {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: #1e293b;
+  padding: 10px 16px;
+  border-radius: 10px;
+  margin-bottom: 12px;
+  font-size: 15px;
+  font-weight: bold;
+  border: 1px solid #334155;
+}
+
+.hud-btn {
+  background-color: #475569;
+  border: none;
+  color: white;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.hud-btn:hover {
+  background-color: #64748b;
+}
+
+/* CANVAS STYLING */
+#canvas-wrapper {
+  position: relative;
+  width: 650px;
+  height: 450px;
+  margin: 0 auto;
+}
+
+canvas {
+  background-color: #020617;
+  border-radius: 12px;
+  display: block;
+  border: 2px solid #1e293b;
+}
+
+/* SYSTEM CHAT LOG */
+#log-panel {
+  background-color: #020617;
+  border-left: 4px solid #f59e0b;
+  padding: 10px 14px;
+  margin-top: 12px;
+  border-radius: 6px;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 12px;
+  color: #e2e8f0;
+  box-shadow: inset 0 2px 8px rgba(0,0,0,0.6);
+}
+
+/* SHOP GRID & ITEMS */
+#shop-panel {
+  margin-top: 16px;
+}
+
+#shop-panel h3 {
+  margin: 0 0 10px 0;
+  font-size: 14px;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.shop-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.shop-item {
+  background-color: #1e293b;
+  padding: 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  border: 2px solid transparent;
+  transition: all 0.15s ease;
+}
+
+.shop-item:hover {
+  background-color: #334155;
+}
+
+.shop-item small {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.shop-item .icon {
+  font-size: 20px;
+  margin-right: 10px;
+}
+
+.shop-item .cost {
+  margin-left: auto;
+  color: #f59e0b;
+  font-weight: bold;
+  font-size: 14px;
+  background-color: #020617;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.active-shop {
+  border-color: #38bdf8;
+  background-color: #0c4a6e;
+}
+
+.audio-controls {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+  font-size: 12px;
+  color: #475569;
+}
+
+.audio-controls label {
+  cursor: pointer;
+}
+
+/* TEXT HIGHLIGHTS */
+.highlight-gold { color: #fbbf24; }
+.highlight-red { color: #f87171; }
+.highlight-blue { color: #38bdf8; }
+.hidden { display: none !important; }
